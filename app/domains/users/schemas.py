@@ -10,7 +10,7 @@ class UserCreate(BaseModel):
     name: Annotated[str, Field(min_length=3, max_length=100)]
     email: Annotated[EmailStr, Field(max_length=255)]
     password: Annotated[str, Field(min_length=8, max_length=128)]
-    timezone: Annotated[str, Field(min_length=3, max_length=50, examples=["UTC"])]
+    timezone: Annotated[str, Field(min_length=3, max_length=50, examples=["UTC"])] = "UTC"
 
 
 class UserUpdate(BaseModel):
