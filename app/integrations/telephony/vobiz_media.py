@@ -46,8 +46,8 @@ async def create_vobiz_audio_session(websocket: Any, *, call_id: str) -> AudioSe
         params=FastAPIWebsocketParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
-            audio_in_sample_rate=wire_sample_rate,
-            audio_out_sample_rate=wire_sample_rate,
+            audio_in_sample_rate=GEMINI_AUDIO_INPUT_RATE,
+            audio_out_sample_rate=GEMINI_AUDIO_OUTPUT_RATE,
             add_wav_header=False,
             serializer=serializer,
         ),

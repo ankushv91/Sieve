@@ -6,31 +6,26 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
-# ---------------------------------------------------------------------------
-# UI Action Types — single source of truth for frontend component dispatch.
-# When you add a new renderable component on the frontend, add its key here.
-# ---------------------------------------------------------------------------
-
 class UIActionType(str, enum.Enum):
     # Campaign views
-    SHOW_CAMPAIGN_LIST   = "SHOW_CAMPAIGN_LIST"     # renders CampaignListPanel
-    SHOW_CAMPAIGN_DETAIL = "SHOW_CAMPAIGN_DETAIL"   # renders CampaignDetailPanel
-    SHOW_CAMPAIGN_CREATE_FORM = "SHOW_CAMPAIGN_CREATE_FORM"  # renders CampaignCreateModal/Form
+    SHOW_CAMPAIGN_LIST   = "SHOW_CAMPAIGN_LIST"
+    SHOW_CAMPAIGN_DETAIL = "SHOW_CAMPAIGN_DETAIL"
+    SHOW_CAMPAIGN_CREATE_FORM = "SHOW_CAMPAIGN_CREATE_FORM"
 
     # Candidate views
-    SHOW_CANDIDATE_LIST  = "SHOW_CANDIDATE_LIST"    # renders CandidateTablePanel
-    SHOW_CANDIDATE_UPLOAD = "SHOW_CANDIDATE_UPLOAD" # renders CandidateUploadModal/Dropzone
+    SHOW_CANDIDATE_LIST  = "SHOW_CANDIDATE_LIST"
+    SHOW_CANDIDATE_UPLOAD = "SHOW_CANDIDATE_UPLOAD"
 
     # Batch / progress views
-    SHOW_SCREENING_STATUS = "SHOW_SCREENING_STATUS" # renders BatchStatusPanel (screening)
-    SHOW_BATCH_STATUS     = "SHOW_BATCH_STATUS"     # renders BatchStatusPanel (generic)
+    SHOW_SCREENING_STATUS = "SHOW_SCREENING_STATUS"
+    SHOW_BATCH_STATUS     = "SHOW_BATCH_STATUS"
 
     # Screening result views
     SHOW_SCREENING_RESULTS = "SHOW_SCREENING_RESULTS"
     SHOW_CANDIDATE_SCREENING_RESULT = "SHOW_CANDIDATE_SCREENING_RESULT"
 
     # Disambiguation
-    SHOW_CAMPAIGN_PICKER  = "SHOW_CAMPAIGN_PICKER"  # renders CampaignSelectorCard
+    SHOW_CAMPAIGN_PICKER  = "SHOW_CAMPAIGN_PICKER"
 
 
 class UIAction(BaseModel):
@@ -41,10 +36,6 @@ class UIAction(BaseModel):
     type: UIActionType
     payload: dict[str, Any] = Field(default_factory=dict)
 
-
-# ---------------------------------------------------------------------------
-# Request / Response shapes
-# ---------------------------------------------------------------------------
 
 class SendMessageRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)

@@ -98,10 +98,6 @@ _ACTIVE_CALLS_TTL: int = 3600
 _ZOMBIE_THRESHOLD_HOURS: int = 2
 
 
-# ===========================================================================
-# HELPERS
-# ===========================================================================
-
 def _arq_pool_settings() -> RedisSettings:
     return RedisSettings.from_dsn(settings.REDIS_URL)
 
@@ -109,10 +105,6 @@ def _arq_pool_settings() -> RedisSettings:
 async def _get_arq_pool() -> ArqRedis:
     return await create_pool(_arq_pool_settings())
 
-
-# ===========================================================================
-# DISPATCHERS  (fan-out only  run in < 1 s, no processing)
-# ===========================================================================
 
 async def dispatch_ingestion_batch(
     ctx: dict[str, Any],
@@ -288,10 +280,6 @@ async def dispatch_campaign_calling(
         await redis.aclose()
 
 
-# ===========================================================================
-# ATOMIC WORKERS  (process exactly ONE item per invocation)
-# ===========================================================================
-
 async def ingest_single_file(
     ctx: dict[str, Any],
     *,
@@ -356,9 +344,6 @@ async def ingest_single_file(
 
             ext = tmp_file.suffix.lower()
 
-            # ----------------------------------------------------------------
-            # ZIP: extract members, create per-file IngestionItems, fan out
-            # ----------------------------------------------------------------
             if ext == ".zip":
                 extracted_files = await asyncio.to_thread(
                     safe_extract_zip, tmp_file, tmp_dir
@@ -470,9 +455,6 @@ async def ingest_single_file(
                     "member_count": len(member_items),
                 }
 
-            # ----------------------------------------------------------------
-            # CSV: all files use durable chunk jobs, including a one-chunk file.
-            # ----------------------------------------------------------------
             elif ext == ".csv":
                 csv_bytes = tmp_file.read_bytes()
                 headers, rows = extract_csv_rows(csv_bytes)
@@ -601,9 +583,6 @@ async def ingest_single_file(
                         "total_rows": len(rows),
                     }
 
-            # ----------------------------------------------------------------
-            # PDF / DOCX / TXT: single document → single candidate
-            # ----------------------------------------------------------------
             else:
                 async def process_fields(
                     extracted_fields: dict[str, Any],
@@ -943,7 +922,7 @@ async def screen_single_candidate(
             screening_payload = await screen_document_llm(
                 candidate_fields=candidate.extracted_fields or {},
                 campaign_fields=campaign.required_fields or {},
-                campaign_text=campaign.raw_text,
+                campaign_text=getattr(campaign, "raw_text", None),
             )
 
             db.add(DocumentScreening(
@@ -1126,10 +1105,6 @@ async def process_call_completion_job(
     return {"call_id": webhook.call_id, "status": "COMPLETED"}
 
 
-# ===========================================================================
-# MAINTENANCE CRON JOB  (Phase 5)
-# ===========================================================================
-
 async def reconcile_zombie_tasks(ctx: dict[str, Any]) -> dict[str, Any]:
     """Re-queue candidates stuck in IN_PROGRESS for longer than the zombie threshold.
 
@@ -1187,11 +1162,6 @@ async def reconcile_zombie_tasks(ctx: dict[str, Any]) -> dict[str, Any]:
 
     logger.info("reconcile_zombie_tasks: re-queued %d zombie candidates.", requeued)
     return {"requeued": requeued}
-
-
-# ===========================================================================
-# INTERNAL FINALISERS
-# ===========================================================================
 
 async def _finalise_ingestion_batch(redis: Any, batch_id: str) -> None:
     """Mark IngestionBatch COMPLETED/PARTIAL in Postgres and update the Redis tracker."""

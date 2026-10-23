@@ -61,10 +61,6 @@ async def run_document_pipeline(
     return text
 
 
-# ---------------------------------------------------------------------------
-# CSV pipeline  (one IngestionItem → multiple candidates)
-# ---------------------------------------------------------------------------
-
 CandidateExtractor = Callable[[str], Awaitable[list[dict[str, Any]]]]
 CandidateProcessor = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -76,17 +72,7 @@ async def run_csv_pipeline(
     process_candidate: CandidateProcessor,
     chunk_size: int | None = None,
 ) -> int:
-    """Parse a CSV file and persist each row as a separate candidate.
-
-    Steps:
-    1. Decode and parse the CSV into rows.
-    2. Split rows into chunks of ``chunk_size`` to avoid LLM token limits.
-    3. For each chunk call ``extract_candidates`` (an LLM-backed function that
-       maps arbitrary CSV text to a list of candidate dicts).
-    4. For every candidate dict returned, call ``process_candidate``.
-
-    Returns the total number of candidates processed.
-    """
+    """Parse a CSV file and persist each row as a separate candidate."""
     if not data:
         raise IngestionPipelineError("CSV file is empty.")
 

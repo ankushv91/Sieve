@@ -14,25 +14,16 @@ logger = logging.getLogger("solo.telephony.twilio")
 
 
 def _normalize_e164(phone: str) -> str:
-    Normalize a phone number to E.164 (a leading '+' followed by digits only).
-
-    #Twilio rejects numbers containing spaces, dashes, or parentheses and, on
-    #trial accounts, can only match a `To` number against Verified Caller IDs
-    #when it is in strict E.164 form.  Candidate phones pulled from resumes/CSVs
-    #frequently carry formatting like '+91 95295 12911', so we strip everything
-    #except digits and the leading plus before sending.
-    
+    """Normalize a phone number to E.164 (a leading '+' followed by digits only)."""
     if not phone:
         return phone
     cleaned = re.sub(r"[^\d+]", "", phone)
-    # Collapse any stray internal '+' and keep only a leading one.
     if cleaned.startswith("+"):
         return "+" + cleaned[1:].lstrip("+") or "+"
     return "+" + cleaned
 
 
 class TwilioTelephonyCarrier(BaseTelephonyCarrier):
-    #Twilio REST call-control adapter
 
     def build_answer_url(self, *, candidate_id: UUID, campaign_id: UUID) -> str:
         from urllib.parse import urlencode

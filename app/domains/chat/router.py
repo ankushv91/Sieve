@@ -26,10 +26,6 @@ from app.domains.users.models import User
 router = APIRouter(prefix="/chat")
 
 
-# ---------------------------------------------------------------------------
-# Session management
-# ---------------------------------------------------------------------------
-
 @router.post(
     "/sessions",
     response_model=ChatSessionResponse,
@@ -87,10 +83,6 @@ async def delete_session(
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found.")
 
-
-# ---------------------------------------------------------------------------
-# Messaging
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/sessions/{session_id}/message",

@@ -39,10 +39,6 @@ from uuid6 import uuid7
 logger = logging.getLogger(__name__)
 
 
-# ===========================================================================
-# Tool Implementation Functions
-# ===========================================================================
-
 async def _get_owned_campaign(
     db: AsyncSession,
     user: User,
@@ -442,10 +438,6 @@ async def tool_get_batch_status(
     }
 
 
-# ===========================================================================
-# Tool Registry  (name → callable)
-# ===========================================================================
-
 _REGISTRY: dict[str, Any] = {
     "list_campaigns": tool_list_campaigns,
     "get_campaign": tool_get_campaign,
@@ -483,10 +475,6 @@ async def dispatch(
         logger.exception("Chat tool %r raised an exception", name)
         return {"error": str(exc)}
 
-
-# ===========================================================================
-# Gemini Function Declarations  (sent to the model on every request)
-# ===========================================================================
 
 TOOL_DEFINITIONS = [
     {

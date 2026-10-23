@@ -24,8 +24,6 @@ from app.domains.analytics.router import router as analytics_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # -- Startup --
-
     # Check configured S3 bucket access without blocking the event loop.
     try:
         await asyncio.to_thread(check_s3_bucket_access)
@@ -40,7 +38,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"❌ Failed to connect to Database: {e}")
 
-    # Warm the Redis connection pool
     try:
         redis = await get_redis_client()
         await redis.ping()
@@ -51,7 +48,6 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # -- Shutdown --
     await close_redis_pool()
     await engine.dispose()
     print("🔌 Database & Redis connections closed.")
@@ -71,18 +67,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register Domain Routers under /api/v1
 app.include_router(auth_router, prefix="/api/v1", tags=["Auth"])
 app.include_router(agents_router, prefix="/api/v1", tags=["Agents"])
 app.include_router(campaigns_router, prefix="/api/v1", tags=["Campaigns"])
 app.include_router(chat_router, prefix="/api/v1", tags=["Chat"])
 app.include_router(telephony_router, prefix="/api/v1", tags=["Telephony"])
 app.include_router(users_router, prefix="/api/v1", tags=["Users"])
-"""
-app.include_router(analytics_router, prefix="/api/v1", tags=["Analytics"])
-"""
-
-# Root & Health Check Endpoints
 
 def custom_openapi():
     if app.openapi_schema:

@@ -67,10 +67,6 @@ from app.domains.users.models import User
 router = APIRouter(prefix="/campaigns")
 
 
-# -----------------------------------------------------------------------
-# Campaign CRUD
-# -----------------------------------------------------------------------
-
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=CampaignResponse)
 async def create_campaign(
     title: str = Form(...),
@@ -213,10 +209,6 @@ async def update_campaign_fields(
     await db.refresh(campaign)
     return campaign
 
-
-# -----------------------------------------------------------------------
-# Candidate CRUD & Upload
-# -----------------------------------------------------------------------
 
 @router.patch("/{campaign_id}/candidates/{candidate_id}", response_model=CandidateResponse)
 async def update_candidate(
@@ -498,10 +490,6 @@ async def batch_status(
     )
 
 
-# -----------------------------------------------------------------------
-# Candidate Screening
-# -----------------------------------------------------------------------
-
 @router.get(
     "/{campaign_id}/candidates",
     response_model=list[CandidateResponse]
@@ -511,7 +499,6 @@ async def get_candidates(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Verify the requesting user owns this campaign
     campaign_result = await db.execute(
         select(Campaign).where(
             Campaign.id == campaign_id,
@@ -777,7 +764,6 @@ async def call_candidates(
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Campaign not found.")
 
-    # Mark candidates as outbound_call / PENDING in the DB
     candidate_query = select(Candidate).where(
         Candidate.campaign_id == campaign_id,
         Candidate.phone.isnot(None),

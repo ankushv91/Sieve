@@ -64,7 +64,6 @@ def extract_csv_rows(data: bytes) -> tuple[list[str], list[dict[str, str]]]:
     headers: list[str] = list(reader.fieldnames or [])
     rows: list[dict[str, str]] = []
     for row in reader:
-        # Strip whitespace from keys and values
         cleaned = {k.strip(): (v.strip() if v else "") for k, v in row.items() if k}
         rows.append(cleaned)
     return headers, rows

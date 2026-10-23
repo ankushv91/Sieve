@@ -42,12 +42,7 @@ def build_twilio_recording_url() -> str:
 
 @router.post("/answer", response_class=Response, status_code=status.HTTP_200_OK)
 async def twilio_answer_endpoint(request: Request) -> Response:
-    #Return TwiML that connects the answered call to our media WebSocket.
-
-    #Twilio POSTs form-encoded data when a call is answered.  The call SID is
-    #in the ``CallSid`` field; candidate/campaign context comes from the query
-    #string we embedded in the answer URL.
-    
+    """Connect the answered call to our media WebSocket."""
     form = await request.form()
     query = request.query_params
 
@@ -89,7 +84,6 @@ async def twilio_answer_endpoint(request: Request) -> Response:
 
 @router.websocket("/media/{call_sid}")
 async def twilio_media_endpoint(websocket: WebSocket, call_sid: str) -> None:
-    #Bidirectional audio WebSocket used by Twilio Media Streams
     call_data = await get_call_status(call_sid)
     if not call_data or not call_data.get("system_prompt"):
         await websocket.close(code=4404, reason="Call session not found.")
@@ -142,7 +136,6 @@ async def twilio_media_endpoint(websocket: WebSocket, call_sid: str) -> None:
 
 @router.post("/recording-ready", status_code=status.HTTP_200_OK)
 async def twilio_recording_ready_endpoint(request: Request) -> dict[str, str]:
-    #Webhook called by Twilio when a recording is available
     body = await request.body()
     # Twilio signs webhooks with X-Twilio-Signature; we delegate to the shared
     # verify_webhook_signature helper which reads TELEPHONY_WEBHOOK_SECRET.

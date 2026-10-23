@@ -41,12 +41,6 @@ from app.domains.users.models import User
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-# Number of most-recent DB turns included verbatim in every Gemini request.
-# Older turns are represented only by ChatSession.summary.
 HISTORY_WINDOW_SIZE = 20
 
 # When turn_count reaches this threshold, summarisation is triggered.
@@ -61,9 +55,6 @@ CHAT_MODEL = settings.GEMINI_CHAT_MODEL
 # Gemini model used for summarisation — can be the same or lighter.
 SUMMARY_MODEL = settings.GEMINI_SUMMARY_MODEL
 
-# ---------------------------------------------------------------------------
-# Module-level Gemini client (instantiated once, reused across requests)
-# ---------------------------------------------------------------------------
 _gemini_client: genai.Client | None = None
 
 
@@ -73,10 +64,6 @@ def _get_client() -> genai.Client:
         _gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
     return _gemini_client
 
-
-# ---------------------------------------------------------------------------
-# System prompt
-# ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 You are the receptionist for the recruitment workspace called SoloBuild.
@@ -107,10 +94,6 @@ def _build_system_prompt(summary: str | None) -> str:
     )
     return _SYSTEM_PROMPT_TEMPLATE.format(summary_block=summary_block).strip()
 
-
-# ---------------------------------------------------------------------------
-# Gemini content serialisation helpers
-# ---------------------------------------------------------------------------
 
 def _content_to_dict(content: genai_types.Content) -> dict:
     """Serialise a Gemini Content object to a plain dict for JSONB storage."""
@@ -317,10 +300,6 @@ def _validate_ui_action(
     return UIAction(type=action.type, payload=safe_payload), None
 
 
-# ---------------------------------------------------------------------------
-# History helpers
-# ---------------------------------------------------------------------------
-
 async def _load_history(
     db: AsyncSession, session_id: UUID
 ) -> list[genai_types.Content]:
@@ -409,10 +388,6 @@ async def _persist_turns(
         session.turn_count = (session.turn_count or 0) + len(turns)
     await db.flush()
 
-
-# ---------------------------------------------------------------------------
-# Agentic loop
-# ---------------------------------------------------------------------------
 
 async def _run_agentic_loop(
     client: genai.Client,
@@ -523,10 +498,6 @@ async def _run_agentic_loop(
     history.append(fallback_turn)
     return fallback_turn, tool_results, ui_action
 
-
-# ---------------------------------------------------------------------------
-# Summarisation
-# ---------------------------------------------------------------------------
 
 async def _maybe_summarise(session_id: UUID) -> None:
     """
@@ -645,10 +616,6 @@ def _log_background_task_exception(task: asyncio.Task[Any]) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
 async def create_session(
     db: AsyncSession,
     user: User,
@@ -724,25 +691,20 @@ async def process_message(
     if session is None:
         raise ValueError(f"Session {session_id} not found.")
 
-    # Auto-title the session from the first message
     if not session.title and user_message:
         session.title = user_message[:80]
 
-    # 1. Load sliding-window history from DB
     history = await _load_history(db, session_id)
     initial_len = len(history)
 
-    # 2. Append the new user turn
     user_turn = genai_types.Content(
         role="user",
         parts=[genai_types.Part(text=user_message)],
     )
     history.append(user_turn)
 
-    # 3. Build system prompt (includes rolling summary for context)
     system_prompt = _build_system_prompt(session.summary)
 
-    # 4. Run the agentic loop
     client = _get_client()
     final_model_turn, tool_results, ui_action = await _run_agentic_loop(
         client=client,
@@ -752,7 +714,6 @@ async def process_message(
         user=user,
     )
 
-    # 5. Extract text + optional UI action
     raw_text = _extract_text(final_model_turn) or "I'm sorry, I couldn't generate a response."
     if _extract_text(final_model_turn) is None:
         final_model_turn = genai_types.Content(
@@ -768,14 +729,11 @@ async def process_message(
             tool_results,
         )
 
-    # 6. Persist: user turn + all new model/tool turns (everything appended since load)
     new_turns = history[initial_len:]
     await _persist_turns(db, session_id, new_turns, ui_action=ui_action)
 
-    # Ensure the background task can observe these turns using its own session.
     await db.commit()
 
-    # 7. Maybe summarise in the background (non-blocking — fire and forget).
     if (session.turn_count or 0) >= SUMMARISE_AFTER_TURNS:
         task = asyncio.create_task(_maybe_summarise(session_id))
         task.add_done_callback(_log_background_task_exception)

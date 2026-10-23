@@ -57,11 +57,6 @@ from app.domains.ingestion.text import (
 
 logger = logging.getLogger(__name__)
 
-
-# =========================================================================
-# DOCUMENT UPLOAD VALIDATION
-# =========================================================================
-
 ALLOWED_EXTENSIONS: set[str] = {".pdf", ".docx", ".txt", ".csv", ".zip"}
 
 EXT_TO_MIME: dict[str, set[str]] = {
@@ -89,12 +84,10 @@ async def validate_document_uploads(files: list[UploadFile]) -> tuple[list[Uploa
     valid_files = []
     invalid_files = []
 
-    # Handle the empty list edge case up front
     if not files:
         return [], [{"filename": "unknown", "reason": "No files were uploaded."}]
 
     for f in files:
-        # Check for missing filename
         if not f.filename:
             invalid_files.append({
                 "filename": "Unknown Filename",
@@ -104,7 +97,6 @@ async def validate_document_uploads(files: list[UploadFile]) -> tuple[list[Uploa
 
         ext = Path(f.filename).suffix.lower()
 
-        # Check for allowed extension
         if ext not in ALLOWED_EXTENSIONS:
             invalid_files.append({
                 "filename": f.filename,
@@ -112,7 +104,6 @@ async def validate_document_uploads(files: list[UploadFile]) -> tuple[list[Uploa
             })
             continue
 
-        # Check for MIME type mismatch
         expected = EXT_TO_MIME.get(ext, set())
         actual = f.content_type or ""
         if actual and expected and actual not in expected:
@@ -122,7 +113,6 @@ async def validate_document_uploads(files: list[UploadFile]) -> tuple[list[Uploa
             })
             continue
 
-        # If it passes all checks, it's valid
         valid_files.append(f)
 
     return valid_files, invalid_files
@@ -190,10 +180,6 @@ async def validate_zip_safety(data: bytes) -> list[str]:
     return safe_names
 
 
-# =========================================================================
-# S3 STAGING
-# =========================================================================
-
 async def stage_files_to_s3(
     batch_id: str,
     files: list[UploadFile],
@@ -254,10 +240,6 @@ async def _delete_staged_s3_objects(keys: list[str], batch_id: str) -> None:
                 key,
             )
 
-
-# =========================================================================
-# REDIS BATCH TRACKER
-# =========================================================================
 
 _BATCH_PENDING_KEY = "campaign:{batch_id}:pending"
 CALL_PAUSE_KEY = "campaign:{campaign_id}:pause"
@@ -348,10 +330,6 @@ async def get_batch_status(redis: Redis, batch_id: str) -> dict[str, str] | None
     return data or None
 
 
-# ---------------------------------------------------------------------------
-# Redis Set-based atomic completion tracker (Phase 3)
-# ---------------------------------------------------------------------------
-
 async def batch_add_pending(redis: Redis, batch_id: str, item_ids: list[str]) -> None:
     """Atomically register all pending item IDs into the tracking Set.
 
@@ -403,7 +381,7 @@ async def batch_mark_done_with_progress(
     end
     return redis.call('SCARD', KEYS[1])
     """
-    remaining = await redis.eval(
+    remaining = await redis.eval( # type: ignore
         script,
         2,
         pending_key,
@@ -430,7 +408,7 @@ async def adjust_batch_total_once(
     end
     return added
     """
-    await redis.eval(
+    await redis.eval( # type: ignore
         script,
         2,
         f"job:{batch_id}:adjustments",
@@ -440,10 +418,6 @@ async def adjust_batch_total_once(
         _BATCH_TTL,
     )
 
-
-# =========================================================================
-# ARQ JOB ENQUEUE
-# =========================================================================
 
 async def enqueue_document_upload_batch(
     redis: Redis,
@@ -457,7 +431,6 @@ async def enqueue_document_upload_batch(
     from arq.connections import RedisSettings
 
     pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-    # Dispatcher: fans out individual file tasks inside the worker
     await pool.enqueue_job(
         "dispatch_ingestion_batch",
         batch_id=batch_id,
@@ -479,7 +452,6 @@ async def enqueue_campaign_screening(
     from arq.connections import RedisSettings
 
     pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-    # Dispatcher: fans out individual candidate screening tasks inside the worker
     await pool.enqueue_job(
         "dispatch_campaign_screening",
         batch_id=batch_id,
@@ -500,7 +472,6 @@ async def enqueue_campaign_calling(
     from arq.connections import RedisSettings
 
     pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-    # Dispatcher: fans out individual candidate call tasks inside the worker
     await pool.enqueue_job(
         "dispatch_campaign_calling",
         batch_id=batch_id,
@@ -509,11 +480,6 @@ async def enqueue_campaign_calling(
     )
     await pool.aclose()
 
-
-# ---------------------------------------------------------------------------
-# Pause / Resume — pure DB state (Phase 4)
-# Redis flags are no longer used; Campaign.status is the sole authority.
-# ---------------------------------------------------------------------------
 
 async def pause_calling_batch(
     db: AsyncSession,
@@ -594,10 +560,6 @@ async def resume_calling_batch(
 
     return len(candidates)
 
-
-# =========================================================================
-# TEXT EXTRACTION
-# =========================================================================
 
 async def build_campaign_raw_text(
     raw_text: str | None,
@@ -743,10 +705,6 @@ async def extract_campaign_requirements_llm(
     )
 
 
-# =========================================================================
-# GENERIC LLM EXTRACTION & SCREENING
-# =========================================================================
-
 async def extract_document_fields_llm(
     document_text: str,
     existing_fields: dict | None = None,
@@ -798,10 +756,6 @@ async def screen_document_llm(
             detail=f"AI service is currently unavailable. Please try again later. Details: {e}",
         )
 
-
-# =========================================================================
-# CANDIDATE PERSISTENCE
-# =========================================================================
 
 async def persist_candidate_from_ingestion(
     db: AsyncSession,
@@ -912,10 +866,6 @@ async def persist_csv_candidate(
     return candidate, True
 
 
-# =========================================================================
-# WEBHOOK PROCESSING
-# =========================================================================
-
 async def process_call_webhook(payload: CallWebhookPayload) -> None:
     from app.core.database import AsyncSessionLocal
     from app.core.redis import get_redis_client
@@ -1022,7 +972,7 @@ async def process_call_webhook(payload: CallWebhookPayload) -> None:
     finally:
         try:
             redis = await get_redis_client()
-            await redis.srem(
+            await redis.srem( # type: ignore
                 f"campaign_active_calls:{payload.campaign_id}",
                 str(payload.candidate_id),
             )  # type: ignore

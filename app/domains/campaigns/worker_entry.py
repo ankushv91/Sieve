@@ -26,17 +26,14 @@ from arq.cron import cron
 
 from app.core.config import settings
 from app.domains.campaigns.worker import (
-    # ── Dispatchers ────────────────────────────────────────────────────────
     dispatch_ingestion_batch,
     dispatch_campaign_screening,
     dispatch_campaign_calling,
-    # ── Atomic workers ─────────────────────────────────────────────────────
     ingest_single_file,
     process_csv_chunk,
     screen_single_candidate,
     call_single_candidate,
     process_call_completion_job,
-    # ── Maintenance ────────────────────────────────────────────────────────
     reconcile_zombie_tasks,
 )
 
@@ -55,11 +52,9 @@ class WorkerSettings:
     """Configuration object consumed by ``arq``."""
 
     functions = [
-        # Dispatchers — fan out atomic tasks; complete in < 1 s
         dispatch_ingestion_batch,
         dispatch_campaign_screening,
         dispatch_campaign_calling,
-        # Atomic workers — each processes exactly 1 item
         ingest_single_file,
         process_csv_chunk,
         screen_single_candidate,

@@ -86,7 +86,6 @@ async def on_step_completed(
     Determines the next step in the pipeline based on the Campaign's WorkflowTemplate.
     """
     
-    # 1. Fetch Candidate & Campaign context
     stmt = select(Candidate).where(Candidate.id == candidate_id)
     candidate = (await db.execute(stmt)).scalar_one_or_none()
     if not candidate:
@@ -99,7 +98,6 @@ async def on_step_completed(
         logger.error(f"Campaign {candidate.campaign_id} not found.")
         return
 
-    # 2. Log the event regardless of workflow routing
     event = WorkflowEventLog(
         campaign_id=campaign.id,
         candidate_id=candidate.id,
@@ -110,7 +108,6 @@ async def on_step_completed(
     db.add(event)
 
     if not campaign.workflow_template_id:
-        # If no workflow is attached, we just mark it completed and stop.
         candidate.step_status = WorkflowStepStatus.COMPLETED
         await db.commit()
         return
@@ -122,12 +119,10 @@ async def on_step_completed(
         await db.commit()
         return
 
-    # 3. Find workflow rules for the service that just finished
     pipeline_steps = template.template.get("steps", {})
     current_config = pipeline_steps.get(service_name)
 
     if not current_config or "next" not in current_config:
-        # End of the pipeline
         candidate.step_status = WorkflowStepStatus.COMPLETED
         await db.commit()
         return

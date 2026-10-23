@@ -94,7 +94,6 @@ async def update_agent_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Ownership check: only the creator can update
     result = await db.execute(
         select(Agent).where(
             Agent.id == agent_id,
@@ -123,7 +122,6 @@ async def delete_agent_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    # Ownership check: only the creator can delete
     result = await db.execute(
         select(Agent).where(
             Agent.id == agent_id,

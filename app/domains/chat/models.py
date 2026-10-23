@@ -32,15 +32,8 @@ class ChatSession(Base):
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
     )
 
-    # Auto-generated from the first user message.
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-    # Gemini-generated rolling summary of turns that have been evicted from
-    # the sliding window. Prepended to every new request as system context.
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
-
-    # How many raw turns are currently stored for this session.
-    # Used to decide when to trigger summarisation without a COUNT(*) query.
     turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     created_at: Mapped[datetime] = mapped_column(
@@ -80,7 +73,6 @@ class ChatMessage(Base):
         nullable=False,
     )
 
-    # Raw Gemini Content object: { "role": "...", "parts": [...] }
     content: Mapped[dict] = mapped_column(JSONB, nullable=False)
 
     # When True, this turn has been folded into ChatSession.summary and is
