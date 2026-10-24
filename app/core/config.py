@@ -34,28 +34,7 @@ class Settings(BaseSettings):
     WORKER_MAX_TRIES: int = 3
     ARQ_JOB_TIMEOUT_SECONDS: int = 1800
 
-    # Redis
     REDIS_URL: str = "redis://localhost:6379"
-
-    # Telephony and real-time voice runtime
-    TELEPHONY_CARRIER: str = "vobiz"
-    APP_BASE_URL: str = "http://localhost:8000"
-    VOBIZ_API_BASE_URL: str = "https://api.vobiz.ai/api/v1"
-    VOBIZ_AUTH_ID: str = ""
-    VOBIZ_AUTH_TOKEN: str = ""
-    VOBIZ_PHONE_NUMBER: str = ""
-    VOBIZ_ANSWER_PATH: str = "/api/v1/telephony/vobiz/answer"
-    VOBIZ_RECORDING_PATH: str = "/api/v1/telephony/vobiz/recording-ready"
-    VOBIZ_MEDIA_PATH: str = "/api/v1/telephony/vobiz/media"
-    VOBIZ_REQUEST_TIMEOUT_SECONDS: float = 15.0
-    TELEPHONY_WEBHOOK_SECRET: str = ""
-    TELEPHONY_WEBHOOK_HEADER: str = "X-Telephony-Signature"
-    VOBIZ_WEBHOOK_SECRET: str = ""
-    PIPECAT_VOICE_PROVIDER: str = "gemini_live"
-    PIPECAT_GEMINI_API_KEY: str = ""
-    PIPECAT_GEMINI_LIVE_MODEL: str = "models/gemini-2.5-flash-native-audio-preview-12-2025"
-    PIPECAT_GEMINI_LIVE_VOICE: str = "Charon"
-    PIPECAT_GEMINI_LIVE_LANGUAGE: str = "en-US"
 
     # Resume & CSV pipeline
     CSV_CHUNK_SIZE: int = 50
