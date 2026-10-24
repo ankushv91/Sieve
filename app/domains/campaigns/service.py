@@ -8,7 +8,6 @@ Contains:
 - Generic Document Text Extraction (PDF, DOCX, TXT)
 - Generic LLM Document Fields Extraction
 - Generic LLM Screening
-- Call webhook processing
 """
 from __future__ import annotations
 from uuid import UUID
@@ -37,12 +36,10 @@ from app.core.s3 import (
     upload_fileobj_to_s3,
 )
 from app.domains.campaigns.models import (
-    CallScreening,
     Campaign,
     Candidate,
     WorkflowStepStatus,
 )
-from app.domains.campaigns.schemas import CallWebhookPayload
 from app.domains.ingestion.models import IngestionItem
 from app.integrations.ai.factory import StructuredExtractionProviderFactory
 from app.integrations.ai.providers.base import StructuredExtractionProvider
@@ -242,7 +239,6 @@ async def _delete_staged_s3_objects(keys: list[str], batch_id: str) -> None:
 
 
 _BATCH_PENDING_KEY = "campaign:{batch_id}:pending"
-CALL_PAUSE_KEY = "campaign:{campaign_id}:pause"
 _BATCH_TTL = 7 * 86400  # 7 days
 
 
@@ -459,106 +455,6 @@ async def enqueue_campaign_screening(
         candidate_ids=candidate_ids,
     )
     await pool.aclose()
-
-
-async def enqueue_campaign_calling(
-    redis: Redis,
-    *,
-    batch_id: str,
-    campaign_id: str,
-    candidate_ids: list[str] | None = None,
-) -> None:
-    from arq import create_pool
-    from arq.connections import RedisSettings
-
-    pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
-    await pool.enqueue_job(
-        "dispatch_campaign_calling",
-        batch_id=batch_id,
-        campaign_id=campaign_id,
-        candidate_ids=candidate_ids,
-    )
-    await pool.aclose()
-
-
-async def pause_calling_batch(
-    db: AsyncSession,
-    redis: Redis,
-    *,
-    batch_id: str,
-    campaign_id: UUID,
-) -> int:
-    """Pause an active calling batch.
-
-    Sets Campaign.status to 'PAUSED' in Postgres.  Atomic workers check this
-    field on every wake-up and exit gracefully without needing a Redis flag.
-    Also marks uncalled candidates as PAUSED so resumption knows which ones
-    still need to be dialled.
-    """
-    await update_batch_progress(redis, batch_id, status="PAUSED")
-    pause_key = CALL_PAUSE_KEY.format(campaign_id=str(campaign_id))
-    await redis.set(pause_key, "1", ex=86400)
-
-    stmt = (
-        select(Candidate)
-        .where(
-            Candidate.campaign_id == campaign_id,
-            Candidate.workflow_step == "outbound_call",
-            Candidate.step_status.in_([WorkflowStepStatus.PENDING, WorkflowStepStatus.READY_FOR_ACTION]),
-        )
-    )
-    result = await db.execute(stmt)
-    candidates = result.scalars().all()
-    for candidate in candidates:
-        candidate.step_status = WorkflowStepStatus.PAUSED
-
-    await db.commit()
-    return len(candidates)
-
-
-async def resume_calling_batch(
-    db: AsyncSession,
-    redis: Redis,
-    *,
-    batch_id: str,
-    campaign_id: UUID,
-) -> int:
-    """Resume a paused calling batch.
-
-    Resets PAUSED candidates back to PENDING in Postgres and fans out new
-    atomic call tasks into ARQ — one per candidate.
-    """
-    await update_batch_progress(redis, batch_id, status="PROCESSING")
-    await redis.delete(CALL_PAUSE_KEY.format(campaign_id=str(campaign_id)))
-
-    stmt = (
-        select(Candidate)
-        .where(
-            Candidate.campaign_id == campaign_id,
-            Candidate.workflow_step == "outbound_call",
-            Candidate.step_status == WorkflowStepStatus.PAUSED,
-        )
-    )
-    result = await db.execute(stmt)
-    candidates = result.scalars().all()
-    candidate_ids = [str(c.id) for c in candidates]
-
-    for candidate in candidates:
-        candidate.step_status = WorkflowStepStatus.PENDING
-    await db.commit()
-
-    if not candidate_ids:
-        return 0
-
-    await batch_add_pending(redis, batch_id, candidate_ids)
-    await enqueue_campaign_calling(
-        redis,
-        batch_id=batch_id,
-        campaign_id=str(campaign_id),
-        candidate_ids=candidate_ids,
-    )
-
-    return len(candidates)
 
 
 async def build_campaign_raw_text(
@@ -865,117 +761,3 @@ async def persist_csv_candidate(
     await db.flush()
     return candidate, True
 
-
-async def process_call_webhook(payload: CallWebhookPayload) -> None:
-    from app.core.database import AsyncSessionLocal
-    from app.core.redis import get_redis_client
-    from app.domains.campaigns.orchestrator import on_step_completed
-
-    redis = None
-    try:
-        # Fast idempotency check before paying for another extraction.
-        async with AsyncSessionLocal() as db:
-            existing = await db.execute(
-                select(CallScreening.id).where(CallScreening.call_id == payload.call_id)
-            )
-            if existing.scalar_one_or_none():
-                return
-
-            candidate_result = await db.execute(
-                select(Candidate).where(Candidate.id == payload.candidate_id)
-            )
-            candidate = candidate_result.scalar_one_or_none()
-            if not candidate:
-                raise ValueError("Candidate not found")
-
-            if payload.status.strip().casefold() == "failed":
-                if candidate.step_status == WorkflowStepStatus.IN_PROGRESS:
-                    candidate.step_status = WorkflowStepStatus.FAILED
-                    await db.commit()
-                return
-
-            campaign_result = await db.execute(
-                select(Campaign).where(Campaign.id == payload.campaign_id)
-            )
-            campaign = campaign_result.scalar_one_or_none()
-            if not campaign:
-                raise ValueError("Campaign not found")
-
-            candidate_fields = dict(candidate.extracted_fields or {})
-            campaign_text = campaign.raw_text or ""
-            campaign_fields = dict(campaign.required_fields or {})
-
-        extraction_provider = StructuredExtractionProviderFactory.build()
-        transcript = payload.transcript or ""
-        extracted_fields = await extraction_provider.extract(
-            context=PromptContext.EXTRACT_CALL_TRANSCRIPT,
-            raw_text=transcript,
-            existing_fields=candidate_fields,
-        )
-        screening_result = await extraction_provider.screen_candidate(
-            context=PromptContext.SCREEN_CANDIDATE,
-            candidate_text=transcript,
-            candidate_fields=extracted_fields,
-            campaign_text=campaign_text,
-            campaign_fields=campaign_fields,
-        )
-
-        async with AsyncSessionLocal() as db:
-            existing = await db.execute(
-                select(CallScreening.id).where(CallScreening.call_id == payload.call_id)
-            )
-            if existing.scalar_one_or_none():
-                return
-
-            candidate_result = await db.execute(
-                select(Candidate).where(Candidate.id == payload.candidate_id)
-            )
-            candidate = candidate_result.scalar_one_or_none()
-            if not candidate:
-                raise ValueError("Candidate not found")
-
-            call_screening = CallScreening(
-                call_id=payload.call_id,
-                campaign_id=payload.campaign_id,
-                candidate_id=payload.candidate_id,
-                transcript=transcript,
-                recording_url=payload.recording_url,
-                match_score=screening_result.get("match_score", 0.0),
-                matched_fields=screening_result.get("matched_fields", {}),
-                unmatched_fields=screening_result.get("unmatched_fields", {}),
-                summary=screening_result.get("summary", ""),
-            )
-            db.add(call_screening)
-
-            merged_fields = dict(candidate.extracted_fields or {})
-            merged_fields.update(extracted_fields)
-            candidate.extracted_fields = merged_fields
-
-            if extracted_fields.get("name"):
-                candidate.name = extracted_fields["name"]
-            if extracted_fields.get("email"):
-                candidate.email = extracted_fields["email"]
-            if extracted_fields.get("phone"):
-                candidate.phone = extracted_fields["phone"]
-
-            # The orchestrator commits this transaction together with its event.
-            await on_step_completed(
-                db=db,
-                candidate_id=candidate.id,
-                service_name="outbound_call",
-                payload={
-                    "call_id": payload.call_id,
-                    "status": payload.status,
-                    "match_score": call_screening.match_score,
-                },
-            )
-    finally:
-        try:
-            redis = await get_redis_client()
-            await redis.srem( # type: ignore
-                f"campaign_active_calls:{payload.campaign_id}",
-                str(payload.candidate_id),
-            )  # type: ignore
-        finally:
-            if redis is not None:
-                await redis.aclose()

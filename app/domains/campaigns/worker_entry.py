@@ -1,20 +1,12 @@
 """
 ARQ worker entry point.
-
-Start with::
-
-    arq app.domains.campaigns.worker_entry.WorkerSettings
-
-Or during development::
-
-    python -m arq app.domains.campaigns.worker_entry.WorkerSettings
-
+arq app.domains.campaigns.worker_entry.WorkerSettings
 Terminal failure handling
-The ``ingest_single_file`` and ``call_single_candidate`` atomic workers detect
-terminal failure inline by comparing ``ctx['job_try']`` against
-``settings.WORKER_MAX_TRIES``.  On the last attempt the item/candidate is
-removed from the Redis pending Set so the batch can reach completion even when
-individual files fail permanently.  No separate ``on_job_end`` hook is needed.
+The ``ingest_single_file`` atomic worker detects terminal failure inline by
+comparing ``ctx['job_try']`` against ``settings.WORKER_MAX_TRIES``.  On the
+last attempt the item is removed from the Redis pending Set so the batch can
+reach completion even when individual files fail permanently.  No separate
+``on_job_end`` hook is needed.
 """
 
 from __future__ import annotations
@@ -28,12 +20,9 @@ from app.core.config import settings
 from app.domains.campaigns.worker import (
     dispatch_ingestion_batch,
     dispatch_campaign_screening,
-    dispatch_campaign_calling,
     ingest_single_file,
     process_csv_chunk,
     screen_single_candidate,
-    call_single_candidate,
-    process_call_completion_job,
     reconcile_zombie_tasks,
 )
 
@@ -54,12 +43,9 @@ class WorkerSettings:
     functions = [
         dispatch_ingestion_batch,
         dispatch_campaign_screening,
-        dispatch_campaign_calling,
         ingest_single_file,
         process_csv_chunk,
         screen_single_candidate,
-        call_single_candidate,
-        process_call_completion_job,
     ]
 
     cron_jobs = [
@@ -69,17 +55,10 @@ class WorkerSettings:
 
     redis_settings = _parse_redis_settings()
 
-    # Raised from 5 → 20: atomic jobs are short-lived (seconds each),
-    # so many more can be held concurrently inside a single event loop.
     max_jobs = 20
 
-    # Dispatcher jobs complete in < 1 s; atomic jobs are bounded by a single
-    # LLM/telephony call — 30 min is a safe upper limit.
     job_timeout = settings.ARQ_JOB_TIMEOUT_SECONDS
 
-    # ARQ retries unexpected whole-worker failures; per-candidate retries fire
-    # automatically because each atomic task raises on failure.
     max_tries = settings.WORKER_MAX_TRIES
 
-    # Health-check key prefix
     health_check_key = "arq:solobuildai:health"

@@ -1,19 +1,16 @@
 """
 ARQ background worker - Atomic Task Fan-Out architecture.
 
-
 Worker functions
 
 Dispatchers (lightweight, fan-out only):
   dispatch_ingestion_batch         queues one ingest_single_file task per file
   dispatch_campaign_screening      queues one screen_single_candidate task per candidate
-  dispatch_campaign_calling        queues one call_single_candidate task per candidate
 
 Atomic workers (process exactly ONE item):
   ingest_single_file               downloads & pipelines a single document (or fans out CSV chunks)
   process_csv_chunk                extracts & persists candidates for a single CSV chunk
   screen_single_candidate          LLM-screens a single candidate
-  call_single_candidate            initiates an outbound call for a single candidate
 
 Maintenance:
   reconcile_zombie_tasks           cron job; re-queues stuck IN_PROGRESS candidates
@@ -22,11 +19,8 @@ Design notes
 
  Each atomic worker calls batch_mark_done after finishing (success or terminal failure).
   When the returned cardinality reaches 0, that worker finalises the batch.
- Rate-limiting for calling uses arq.Retry(defer=...) instead of asyncio.sleep,
-  so the worker slot is released immediately when concurrency is full.
- Pause state lives exclusively in Postgres (Candidate.step_status == PAUSED).
-  There are no Redis pause flags; atomic workers check Campaign status on each run.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -38,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from arq import ArqRedis, Retry
+from arq import ArqRedis
 from arq import create_pool
 from arq.connections import RedisSettings
 from sqlalchemy import select
@@ -68,7 +62,6 @@ from app.domains.campaigns.service import (
     fail_batch,
     persist_candidate_from_ingestion,
     persist_csv_candidate,
-    process_call_webhook,
     screen_document_llm,
     update_batch_progress,
 )
@@ -82,19 +75,9 @@ from app.domains.ingestion.models import (
 )
 from app.domains.ingestion.pipeline import run_document_pipeline
 from app.domains.ingestion.text import csv_rows_to_text, extract_csv_rows
-from app.domains.telephony.schemas import CallInitiationRequest
-from app.domains.campaigns.schemas import CallWebhookPayload
-from app.domains.telephony.service import initiate_outbound_call
 
 logger = logging.getLogger("arq.worker.document")
 
-# Maximum simultaneous outbound calls per campaign
-_MAX_CONCURRENT_CALLS: int = 3
-# How long to defer a call task when all slots are full (seconds)
-_CALL_RETRY_DEFER_SECS: float = 5.0
-# Safety-net TTL for the active-calls Redis Set (seconds)
-_ACTIVE_CALLS_TTL: int = 3600
-# Candidates stuck in IN_PROGRESS for longer than this are re-queued by the cron
 _ZOMBIE_THRESHOLD_HOURS: int = 2
 
 
@@ -217,63 +200,6 @@ async def dispatch_campaign_screening(
 
     except Exception as exc:
         logger.exception("dispatch_campaign_screening %s: unhandled error", batch_id)
-        await fail_batch(redis, batch_id, str(exc))
-        raise
-    finally:
-        await redis.aclose()
-
-
-async def dispatch_campaign_calling(
-    ctx: dict[str, Any],
-    *,
-    batch_id: str,
-    campaign_id: str,
-    candidate_ids: list[str] | None = None,
-) -> dict[str, Any]:
-    """Query callable candidates, initialise Redis tracking Set, fan out atomic tasks."""
-    redis = await get_redis_client()
-    try:
-        await update_batch_progress(redis, batch_id, status="PROCESSING")
-
-        if candidate_ids == []:
-            await complete_batch(redis, batch_id)
-            return {"batch_id": batch_id, "status": "COMPLETED", "task_count": 0}
-
-        async with AsyncSessionLocal() as db:
-            query = select(Candidate).where(
-                Candidate.campaign_id == UUID(campaign_id),
-                Candidate.phone.isnot(None),
-            )
-            if candidate_ids:
-                query = query.where(Candidate.id.in_([UUID(cid) for cid in candidate_ids]))
-            result = await db.execute(query)
-            candidates = result.scalars().all()
-
-        if not candidates:
-            await complete_batch(redis, batch_id)
-            return {"batch_id": batch_id, "status": "COMPLETED", "task_count": 0}
-
-        cids = [str(c.id) for c in candidates]
-        await update_batch_progress(redis, batch_id, total_candidates=len(cids))
-        await batch_add_pending(redis, batch_id, cids)
-
-        pool = await _get_arq_pool()
-        try:
-            for cid in cids:
-                await pool.enqueue_job(
-                    "call_single_candidate",
-                    campaign_id=campaign_id,
-                    candidate_id=cid,
-                    batch_id=batch_id,
-                )
-        finally:
-            await pool.aclose()
-
-        logger.info("dispatch_campaign_calling %s: dispatched %d tasks.", batch_id, len(cids))
-        return {"batch_id": batch_id, "status": "DISPATCHED", "task_count": len(cids)}
-
-    except Exception as exc:
-        logger.exception("dispatch_campaign_calling %s: unhandled error", batch_id)
         await fail_batch(redis, batch_id, str(exc))
         raise
     finally:
@@ -959,152 +885,6 @@ async def screen_single_candidate(
         await redis.aclose()
 
 
-async def call_single_candidate(
-    ctx: dict[str, Any],
-    *,
-    campaign_id: str,
-    candidate_id: str,
-    batch_id: str,
-) -> dict[str, Any]:
-    """Initiate an outbound call for exactly one candidate.
-
-    Rate-limiting via arq.Retry (non-blocking)  worker slot freed immediately
-    when at capacity.  Pause state is read exclusively from Postgres.
-    """
-    redis = await get_redis_client()
-    active_calls_key = f"campaign_active_calls:{campaign_id}"
-
-    try:
-        async with AsyncSessionLocal() as db:
-            campaign_result = await db.execute(
-                select(Campaign).where(Campaign.id == UUID(campaign_id))
-            )
-            campaign = campaign_result.scalar_one_or_none()
-            if not campaign:
-                logger.error("call_single_candidate: campaign %s not found.", campaign_id)
-                await update_batch_progress(redis, batch_id, failed_incr=1)
-                is_last = await batch_mark_done(redis, batch_id, candidate_id)
-                if is_last:
-                    await complete_batch(redis, batch_id, status="PARTIAL")
-                return {"candidate_id": candidate_id, "status": "FAILED"}
-
-            candidate = await db.get(Candidate, UUID(candidate_id))
-            if not candidate or not candidate.phone:
-                logger.warning(
-                    "call_single_candidate: candidate %s missing or has no phone.", candidate_id
-                )
-                await update_batch_progress(redis, batch_id, failed_incr=1)
-                is_last = await batch_mark_done(redis, batch_id, candidate_id)
-                if is_last:
-                    await complete_batch(redis, batch_id, status="PARTIAL")
-                return {"candidate_id": candidate_id, "status": "SKIPPED"}
-
-            #  Pause guard (pure DB state — no Redis flag)
-            if candidate.step_status == WorkflowStepStatus.PAUSED:
-                logger.info(
-                    "call_single_candidate: candidate %s is PAUSED, exiting.", candidate_id
-                )
-                # Must still remove from pending Set so the batch can complete
-                # when all other candidates finish or are also paused.
-                is_last = await batch_mark_done(redis, batch_id, candidate_id)
-                if is_last:
-                    await complete_batch(redis, batch_id, status="PARTIAL")
-                return {"candidate_id": candidate_id, "status": "PAUSED"}
-
-            # Idempotency guard
-            if candidate.step_status in (
-                WorkflowStepStatus.COMPLETED,
-                WorkflowStepStatus.IN_PROGRESS,
-            ):
-                is_last = await batch_mark_done(redis, batch_id, candidate_id)
-                if is_last:
-                    await complete_batch(redis, batch_id)
-                return {"candidate_id": candidate_id, "status": "SKIPPED"}
-
-            #  Concurrency rate-limiting via arq.Retry 
-            active_calls: int = await redis.scard(active_calls_key)  # type: ignore
-            if active_calls >= _MAX_CONCURRENT_CALLS:
-                logger.debug(
-                    "call_single_candidate: campaign %s at capacity (%d/%d), deferring.",
-                    campaign_id, active_calls, _MAX_CONCURRENT_CALLS,
-                )
-                # Non-blocking: release this worker slot and retry after delay
-                raise Retry(defer=_CALL_RETRY_DEFER_SECS)
-
-            #  Reserve concurrency slot atomically 
-            await redis.sadd(active_calls_key, candidate_id)  # type: ignore
-            await redis.expire(active_calls_key, _ACTIVE_CALLS_TTL)  # type: ignore
-
-            candidate.step_status = WorkflowStepStatus.IN_PROGRESS
-            candidate.workflow_step = "outbound_call"
-            await db.commit()
-
-            required_fields = campaign.required_fields or {}
-            raw_text = campaign.raw_text
-            candidate_phone = candidate.phone
-
-        #  Initiate call (DB session closed before network call) 
-        request = CallInitiationRequest(
-            candidate_id=UUID(candidate_id),
-            campaign_id=UUID(campaign_id),
-            candidate_phone=candidate_phone,
-            required_fields=required_fields,
-            raw_text=raw_text,
-        )
-        await initiate_outbound_call(request)
-
-        await update_batch_progress(redis, batch_id, processed_incr=1)
-
-        # Call completion (SREM from active_calls_key) happens in telephony webhook.
-        is_last = await batch_mark_done(redis, batch_id, candidate_id)
-        if is_last:
-            await complete_batch(redis, batch_id)
-
-        logger.info("call_single_candidate: candidate %s call initiated.", candidate_id)
-        return {"candidate_id": candidate_id, "status": "INITIATED"}
-
-    except Retry:
-        raise  # Let ARQ handle the deferred retry transparently
-
-    except Exception as exc:
-        logger.exception("call_single_candidate: candidate %s failed.", candidate_id)
-        await redis.srem(active_calls_key, candidate_id)  # type: ignore
-        await update_batch_progress(redis, batch_id, failed_incr=1)
-
-        # Reset candidate back to PENDING so ARQ retries can actually attempt
-        # the call again (idempotency guard would skip IN_PROGRESS candidates).
-        job_try: int = ctx.get("job_try", 1)
-        is_terminal = job_try >= settings.WORKER_MAX_TRIES
-        async with AsyncSessionLocal() as db:
-            candidate = await db.get(Candidate, UUID(candidate_id))
-            if candidate and candidate.step_status == WorkflowStepStatus.IN_PROGRESS:
-                candidate.step_status = (
-                    WorkflowStepStatus.FAILED if is_terminal else WorkflowStepStatus.PENDING
-                )
-                await db.commit()
-
-        is_last = await batch_mark_done(redis, batch_id, candidate_id)
-        if is_last:
-            await complete_batch(redis, batch_id, status="PARTIAL")
-
-        if not is_terminal:
-            raise
-
-    finally:
-        await redis.aclose()
-
-
-async def process_call_completion_job(
-    ctx: dict[str, Any],
-    *,
-    payload: dict[str, Any],
-) -> dict[str, str]:
-    """Run post-call extraction and screening as a retryable ARQ job."""
-    webhook = CallWebhookPayload.model_validate(payload)
-    await process_call_webhook(webhook)
-    return {"call_id": webhook.call_id, "status": "COMPLETED"}
-
-
 async def reconcile_zombie_tasks(ctx: dict[str, Any]) -> dict[str, Any]:
     """Re-queue candidates stuck in IN_PROGRESS for longer than the zombie threshold.
 
@@ -1141,9 +921,7 @@ async def reconcile_zombie_tasks(ctx: dict[str, Any]) -> dict[str, Any]:
                 candidate.step_status = WorkflowStepStatus.PENDING
 
                 task_name: str | None = None
-                if candidate.workflow_step == "outbound_call":
-                    task_name = "call_single_candidate"
-                elif candidate.workflow_step == "document_screening":
+                if candidate.workflow_step == "document_screening":
                     task_name = "screen_single_candidate"
 
                 if task_name:

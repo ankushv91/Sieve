@@ -24,19 +24,17 @@ logger = logging.getLogger("solo.orchestrator")
 # candidate_id here results in exactly one atomic worker being queued.
 SERVICE_TO_TASK_MAP = {
     "document_screening": "dispatch_campaign_screening",
-    "outbound_call": "dispatch_campaign_calling",
 }
 
 async def enqueue_workflow_task(*, task_name: str, campaign_id: UUID, candidate_id: UUID | None = None) -> None:
     """Enqueue a workflow dispatcher task in ARQ using the app Redis connection."""
     pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
     try:
-        if task_name in ("dispatch_campaign_screening", "dispatch_campaign_calling"):
+        if task_name == "dispatch_campaign_screening":
             from uuid6 import uuid7
-            prefix = "call" if task_name == "dispatch_campaign_calling" else "screen"
             await pool.enqueue_job(
                 task_name,
-                batch_id=f"{prefix}_{uuid7()}",
+                batch_id=f"screen_{uuid7()}",
                 campaign_id=str(campaign_id),
                 candidate_ids=[str(candidate_id)] if candidate_id else None,
             )

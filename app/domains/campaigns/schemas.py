@@ -73,38 +73,6 @@ class DocumentScreeningResponse(BaseModel):
     updated_at: datetime
     model_config = ConfigDict(from_attributes=True)
 
-class CallScreeningResponse(BaseModel):
-    id: UUID
-    campaign_id: UUID
-    candidate_id: UUID
-    call_id: str | None
-    transcript: str | None
-    recording_url: str | None
-    match_score: float | None
-    matched_fields: dict | None
-    unmatched_fields: dict | None
-    summary: str | None
-    created_at: datetime
-    updated_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-class WorkflowEventLogResponse(BaseModel):
-    id: UUID
-    campaign_id: UUID
-    candidate_id: UUID
-    service_name: str
-    status: str
-    payload: dict | None
-    created_at: datetime
-    model_config = ConfigDict(from_attributes=True)
-
-class CallWebhookPayload(BaseModel):
-    call_id: str
-    candidate_id: UUID
-    campaign_id: UUID
-    status: str
-    transcript: str | None = None
-    recording_url: str | None = None
 
 
 class RejectedUploadFile(BaseModel):
@@ -143,17 +111,5 @@ class ScreeningRequest(BaseModel):
     candidate_ids: list[UUID] | None = None
 
 class ScreeningBatchResponse(BaseModel):
-    batch_id: str
-    status: str
-
-class CallingRequest(BaseModel):
-    candidate_ids: list[UUID] | None = None
-
-class CallingBatchResponse(BaseModel):
-    batch_id: str
-    status: str
-
-class CallingBatchControlResponse(BaseModel):
-    """Response for pause / resume actions on a calling batch."""
     batch_id: str
     status: str
